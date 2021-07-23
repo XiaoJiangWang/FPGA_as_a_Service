@@ -48,12 +48,19 @@ const (
 	ADVANTECH_ID   = "0x13fe"
 	AWS_ID         = "0x1d0f"
 	AristaVendorID = "0x3475"
+
+	XdmaDevInstanceFile = "xdma_dev_instance"
+	XdmaSTR             = "xdma"
+	XdmaSeparator       = "_"
+	XdamDevPrefix       = "/dev"
 )
 
 type Pairs struct {
-	Mgmt string
-	User string
-	Qdma string
+	Mgmt     string
+	User     string
+	Qdma     string
+	IsXdma   bool
+	XdmaDevs []string
 }
 
 type Device struct {
@@ -106,6 +113,23 @@ func GetFileNameFromPrefix(dir string, prefix string) (string, error) {
 	return "", nil
 }
 
+func GetFileNameCommonPrefix(dir string, separator string) (string, error) {
+	userFiles, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("Can't read folder %s", dir)
+	}
+	prefix := ""
+	for _, userFile := range userFiles {
+		fname := userFile.Name()
+		if prefix == "" {
+			ans := strings.Split(fname, separator)
+			prefix = ans[0]
+			break
+		}
+	}
+	return prefix, nil
+}
+
 func GetFileContent(file string) (string, error) {
 	if buf, err := ioutil.ReadFile(file); err != nil {
 		return "", fmt.Errorf("Can't read file %s", file)
@@ -139,6 +163,24 @@ func IsMgmtPf(pciID string) bool {
 func IsUserPf(pciID string) bool {
 	fname := path.Join(SysfsDevices, pciID, UserFile)
 	return FileExist(fname)
+}
+
+func IsXdma(pciID string) bool {
+	fname := path.Join(SysfsDevices, pciID, XdmaDevInstanceFile)
+	return FileExist(fname)
+}
+
+func GetXdmaDev(dir string) ([]string, error) {
+	userFiles, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("Can't read folder %s", dir)
+	}
+
+	devs := make([]string, 0, len(userFiles))
+	for _, userFile := range userFiles {
+		devs = append(devs, path.Join(XdamDevPrefix, userFile.Name()))
+	}
+	return devs, nil
 }
 
 func GetDevices() ([]Device, error) {
@@ -274,6 +316,49 @@ func GetDevices() ([]Device, error) {
 				return nil, err
 			}
 			pairMap[DBD].Mgmt = MgmtPrefix + content
+		} else if IsXdma(pciID) {
+			// get shell version
+			content, err := GetFileNameCommonPrefix(path.Join(SysfsDevices, pciID, XdmaSTR), XdmaSeparator)
+			if err != nil {
+				return nil, err
+			}
+			dsaVer := content
+
+			// get device id
+			fname = path.Join(SysfsDevices, pciID, DeviceFile)
+			content, err = GetFileContent(fname)
+			if err != nil {
+				return nil, err
+			}
+			devid := content
+
+			// get Serial Number
+			fname = path.Join(SysfsDevices, pciID, DeviceFile)
+			content, err = GetFileContent(fname)
+			if err != nil {
+				return nil, err
+			}
+			SN := content
+
+			// get pairs
+			pairMap[DBD].IsXdma = true
+			pairMap[DBD].XdmaDevs, err = GetXdmaDev(path.Join(SysfsDevices, pciID, XdmaSTR))
+			if err != nil {
+				return nil, err
+			}
+
+			//so far, return Healthy
+			healthy := pluginapi.Healthy
+			devices = append(devices, Device{
+				index:     strconv.Itoa(len(devices) + 1),
+				shellVer:  dsaVer,
+				timestamp: "",
+				DBDF:      pciID,
+				deviceID:  devid,
+				Healthy:   healthy,
+				SN:        SN,
+				Nodes:     pairMap[DBD],
+			})
 		}
 	}
 	return devices, nil

@@ -74,7 +74,13 @@ func NewFPGADevicePlugin() *FPGADevicePlugin {
 			}
 			devMap := make(map[string]map[string]Device)
 			for _, device := range devices {
-				DSAtype := device.shellVer + "-" + device.timestamp
+				var DSAtype string
+				if device.timestamp != "" {
+					DSAtype = device.shellVer + "-" + device.timestamp
+				} else {
+					DSAtype = device.shellVer
+				}
+
 				id := device.DBDF
 				if subMap, ok := devMap[DSAtype]; ok {
 					subMap = devMap[DSAtype]
@@ -353,48 +359,65 @@ func (m *FPGADevicePluginServer) Allocate(ctx context.Context, req *pluginapi.Al
 				return nil, fmt.Errorf("invalid allocation request: unknown device: %s", id)
 			}
 
-			// Before we have mgmt and user pf separated, we add both to the device cgroup.
-			// It is still safe with mgmt pf assigned to container since xilinx device driver
-			// makes sure flashing DSA(shell) through mgmt pf in container is denied.
-			// This is not good. we will change that later, then only the user pf node is
-			// required to be assigned to container(device cgroup of the container)
-			//
-			// When containers are on top of VM, it is possible only user PF is assigned
-			// to VM, so the Mgmt is empty. Don't add it to cgroup in that case
-			if dev.Nodes.Mgmt != "" {
+			if !dev.Nodes.IsXdma {
+				// Before we have mgmt and user pf separated, we add both to the device cgroup.
+				// It is still safe with mgmt pf assigned to container since xilinx device driver
+				// makes sure flashing DSA(shell) through mgmt pf in container is denied.
+				// This is not good. we will change that later, then only the user pf node is
+				// required to be assigned to container(device cgroup of the container)
+				//
+				// When containers are on top of VM, it is possible only user PF is assigned
+				// to VM, so the Mgmt is empty. Don't add it to cgroup in that case
+				if dev.Nodes.Mgmt != "" {
+					cres.Devices = append(cres.Devices, &pluginapi.DeviceSpec{
+						HostPath:      dev.Nodes.Mgmt,
+						ContainerPath: dev.Nodes.Mgmt,
+						Permissions:   "rwm",
+					})
+					cres.Mounts = append(cres.Mounts, &pluginapi.Mount{
+						HostPath:      dev.Nodes.Mgmt,
+						ContainerPath: dev.Nodes.Mgmt,
+						ReadOnly:      false,
+					})
+				}
 				cres.Devices = append(cres.Devices, &pluginapi.DeviceSpec{
-					HostPath:      dev.Nodes.Mgmt,
-					ContainerPath: dev.Nodes.Mgmt,
+					HostPath:      dev.Nodes.User,
+					ContainerPath: dev.Nodes.User,
 					Permissions:   "rwm",
 				})
 				cres.Mounts = append(cres.Mounts, &pluginapi.Mount{
-					HostPath:      dev.Nodes.Mgmt,
-					ContainerPath: dev.Nodes.Mgmt,
+					HostPath:      dev.Nodes.User,
+					ContainerPath: dev.Nodes.User,
 					ReadOnly:      false,
 				})
-			}
-			cres.Devices = append(cres.Devices, &pluginapi.DeviceSpec{
-				HostPath:      dev.Nodes.User,
-				ContainerPath: dev.Nodes.User,
-				Permissions:   "rwm",
-			})
-			cres.Mounts = append(cres.Mounts, &pluginapi.Mount{
-				HostPath:      dev.Nodes.User,
-				ContainerPath: dev.Nodes.User,
-				ReadOnly:      false,
-			})
-			// if this device supports qdma, assign the qdma node to pod too
-			if dev.Nodes.Qdma != "" {
-				cres.Devices = append(cres.Devices, &pluginapi.DeviceSpec{
-					HostPath:      dev.Nodes.Qdma,
-					ContainerPath: dev.Nodes.Qdma,
-					Permissions:   "rwm",
-				})
-				cres.Mounts = append(cres.Mounts, &pluginapi.Mount{
-					HostPath:      dev.Nodes.Qdma,
-					ContainerPath: dev.Nodes.Qdma,
-					ReadOnly:      false,
-				})
+				// if this device supports qdma, assign the qdma node to pod too
+				if dev.Nodes.Qdma != "" {
+					cres.Devices = append(cres.Devices, &pluginapi.DeviceSpec{
+						HostPath:      dev.Nodes.Qdma,
+						ContainerPath: dev.Nodes.Qdma,
+						Permissions:   "rwm",
+					})
+					cres.Mounts = append(cres.Mounts, &pluginapi.Mount{
+						HostPath:      dev.Nodes.Qdma,
+						ContainerPath: dev.Nodes.Qdma,
+						ReadOnly:      false,
+					})
+				}
+			} else {
+				// is xdma devices
+				for _, xdmaDev := range dev.Nodes.XdmaDevs {
+					cres.Devices = append(cres.Devices, &pluginapi.DeviceSpec{
+						HostPath:      xdmaDev,
+						ContainerPath: xdmaDev,
+						Permissions:   "rwm",
+					})
+					cres.Mounts = append(cres.Mounts, &pluginapi.Mount{
+						HostPath:      xdmaDev,
+						ContainerPath: xdmaDev,
+						ReadOnly:      false,
+					})
+				}
+				//log.Printf("xdma device, devices: %v, mounts: %v", cres.Devices, cres.Mounts)
 			}
 		}
 		response.ContainerResponses = append(response.ContainerResponses, cres)
